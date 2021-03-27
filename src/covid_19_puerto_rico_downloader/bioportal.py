@@ -72,7 +72,8 @@ class Bioportal():
 
     def download_json(self, endpoint, now):
         logging.info('Downloading %s from %s', endpoint.name, endpoint.url)
-        r = requests.get(endpoint.url, headers={'Accept-Encoding': 'gzip'})
+        r = requests.get(endpoint.url, stream=True,
+                         headers={'Accept-Encoding': 'gzip'})
         jsonfile = endpoint.make_filename(now, "json.bz2")
         with bz2.open(jsonfile, 'wb') as fd:
             for chunk in r.iter_content(chunk_size=2**24):
