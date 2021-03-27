@@ -19,7 +19,7 @@ RUN poetry build
 
 FROM base as app
 RUN apt-get update
-RUN apt-get install -y bzip2 time
+RUN apt-get install -y bzip2 time libyajl2
 RUN python3 -m pip install pipx
 RUN pipx install awscli
 WORKDIR /covid-19-puerto-rico

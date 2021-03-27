@@ -1,7 +1,7 @@
 import argparse
 import bz2
 from datetime import datetime
-import ijson
+import ijson.backends.yajl2_c as ijson
 import json
 import logging
 import pathlib
@@ -39,10 +39,8 @@ class Bioportal():
 
     def run(self):
         self.make_directory_structure()
-        now = datetime.utcnow()
-        logging.info("Using downloadedAt = %s", now.isoformat())
         for endpoint in BIOPORTAL_ENDPOINTS:
-            self.process_endpoint(endpoint, now)
+            self.process_endpoint(endpoint)
         logging.info('All downloads done!')
 
     def make_directory_structure(self):
@@ -51,7 +49,10 @@ class Bioportal():
         self.bioportal_sync_dir.mkdir(exist_ok=True)
 
 
-    def process_endpoint(self, endpoint, now):
+    def process_endpoint(self, endpoint):
+        now = datetime.utcnow()
+        logging.info("Using downloadedAt = %s for %s",
+                     now.isoformat(), endpoint.name)
         jsonfile = self.download_json(endpoint, now)
         jsonlfile = endpoint.make_filename(now, "jsonl.bz2")
         self.convert_to_jsonl(jsonfile, jsonlfile, now)
@@ -74,7 +75,7 @@ class Bioportal():
         r = requests.get(endpoint.url, headers={'Accept-Encoding': 'gzip'})
         jsonfile = endpoint.make_filename(now, "json.bz2")
         with bz2.open(jsonfile, 'wb') as fd:
-            for chunk in r.iter_content(chunk_size=128):
+            for chunk in r.iter_content(chunk_size=2**24):
                 fd.write(chunk)
         return jsonfile
 
@@ -83,9 +84,10 @@ class Bioportal():
         We also add a `downloadedAt` field to the records."""
         logging.info('Converting %s to jsonl...', jsonfile)
         now_str = now.isoformat()
-        with bz2.open(jsonfile) as data:
+        with bz2.open(jsonfile, mode='rb') as data:
             with bz2.open(outpath, mode='wt', encoding='UTF-8') as out:
-                for record in ijson.items(data, prefix='item'):
+                for record in ijson.items(data, prefix='item',
+                                          use_float=True, buf_size=2**24):
                     record['downloadedAt'] = now_str
                     json.dump(record, out, allow_nan=False, separators=(',', ':'))
                     out.write('\n')
