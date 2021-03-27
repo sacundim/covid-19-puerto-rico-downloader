@@ -13,13 +13,6 @@ import shutil
 import subprocess
 
 
-
-#    'minimal-info-unique-tests':
-#        'https://bioportal.salud.gov.pr/api/administration/reports/minimal-info-unique-tests',
-#    'orders-basic':
-#        'https://bioportal.salud.gov.pr/api/administration/reports/orders/basic'
-
-
 def process_arguments():
     parser = argparse.ArgumentParser(description='Download Bioportal data sets')
     parser.add_argument('--s3-sync-dir', type=str, required=True,
@@ -60,10 +53,8 @@ class Bioportal():
 
     def process_endpoint(self, endpoint, now):
         jsonfile = self.download_json(endpoint, now)
-        jsonlfile = f'{jsonfile}l'
+        jsonlfile = endpoint.make_filename(now, "jsonl.bz2")
         self.convert_to_jsonl(jsonfile, jsonlfile, now)
-        jsonfile = self.compress_file(jsonfile)
-        jsonlfile = self.compress_file(jsonlfile)
         parquetfile = endpoint.make_filename(now, "parquet")
         self.convert_to_parquet(jsonlfile, parquetfile)
 
@@ -81,24 +72,19 @@ class Bioportal():
     def download_json(self, endpoint, now):
         logging.info('Downloading %s from %s', endpoint.name, endpoint.url)
         r = requests.get(endpoint.url, headers={'Accept-Encoding': 'gzip'})
-        jsonfile = endpoint.make_filename(now, "json")
-        with open(jsonfile, 'wb') as fd:
+        jsonfile = endpoint.make_filename(now, "json.bz2")
+        with bz2.open(jsonfile, 'wb') as fd:
             for chunk in r.iter_content(chunk_size=128):
                 fd.write(chunk)
         return jsonfile
-
-    def compress_file(self, path):
-        logging.info('Compressing %s', path)
-        subprocess.run(['bzip2', '-f', '-9', path])
-        return f'{path}.bz2'
 
     def convert_to_jsonl(self, jsonfile, outpath, now):
         """Convert the single-object JSON output from Bioportal to newline-delimited.
         We also add a `downloadedAt` field to the records."""
         logging.info('Converting %s to jsonl...', jsonfile)
         now_str = now.isoformat()
-        with open(jsonfile) as data:
-            with open(outpath, 'w') as out:
+        with bz2.open(jsonfile) as data:
+            with bz2.open(outpath, mode='wt', encoding='UTF-8') as out:
                 for record in ijson.items(data, prefix='item'):
                     record['downloadedAt'] = now_str
                     json.dump(record, out, allow_nan=False, separators=(',', ':'))
@@ -109,7 +95,10 @@ class Bioportal():
         table = pyarrow.json.read_json(jsonlfile)
         # Without this `filesystem` nonsense, PyArrow fails if there's colons
         # in filename timestamps
-        pyarrow.parquet.write_table(table, outpath, filesystem=self.filesystem)
+        pyarrow.parquet.write_table(table, outpath,
+                                    filesystem=self.filesystem,
+                                    compression='gzip')
+
 
 class Endpoint():
     def __init__(self, name, version, url):
@@ -118,7 +107,7 @@ class Endpoint():
         self.url = url
 
     def make_destination_dir(self, bioportal_sync_dir, format):
-        destination = pathlib.Path(f'{bioportal_sync_dir}/bioportal/{self.name}/{format}_{self.version}')
+        destination = pathlib.Path(f'{bioportal_sync_dir}/{self.name}/{format}_{self.version}')
         destination.mkdir(exist_ok=True, parents=True)
         return destination
 
@@ -126,6 +115,18 @@ class Endpoint():
         return f'{self.name}_{now.isoformat()}.{extension}'
 
 BIOPORTAL_ENDPOINTS = [
+    Endpoint(
+        'minimal-info-unique-tests', 'v3',
+        'https://bioportal.salud.gov.pr/api/administration/reports/minimal-info-unique-tests'
+    ),
+    Endpoint(
+        'orders-basic', 'v1',
+        'https://bioportal.salud.gov.pr/api/administration/reports/orders/basic'
+    )
+]
+
+# For testing
+NOT_BIOPORTAL_ENDPOINTS = [
     Endpoint(
         'grouped-by-collected-date', 'v1',
         'https://BioPortal.salud.gov.pr/api/administration/reports/cases/grouped-by-collected-date'
