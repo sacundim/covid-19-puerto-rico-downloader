@@ -13,14 +13,11 @@ import shutil
 import subprocess
 
 
-BIOPORTAL_ENDPOINTS = {
-    'grouped-by-collected-date':
-        'https://BioPortal.salud.gov.pr/api/administration/reports/cases/grouped-by-collected-date',
+
 #    'minimal-info-unique-tests':
 #        'https://bioportal.salud.gov.pr/api/administration/reports/minimal-info-unique-tests',
 #    'orders-basic':
 #        'https://bioportal.salud.gov.pr/api/administration/reports/orders/basic'
-}
 
 
 def process_arguments():
@@ -43,42 +40,52 @@ class Bioportal():
         self.s3_sync_dir = pathlib.Path(args.s3_sync_dir)
         self.bioportal_sync_dir = pathlib.Path(f'{self.s3_sync_dir}/bioportal')
 
+        # Without this `filesystem` nonsense (used below), PyArrow fails if there's
+        # colons in filename timestamps
+        self.filesystem = pyarrow.fs.LocalFileSystem()
+
     def run(self):
         self.make_directory_structure()
         now = datetime.utcnow()
         logging.info("Using downloadedAt = %s", now.isoformat())
-        for key, url in BIOPORTAL_ENDPOINTS.items():
-            self.process_endpoint(key, url, now)
+        for endpoint in BIOPORTAL_ENDPOINTS:
+            self.process_endpoint(endpoint, now)
+        logging.info('All downloads done!')
 
     def make_directory_structure(self):
         """Ensure all of the required directories exist."""
         self.s3_sync_dir.mkdir(exist_ok=True)
         self.bioportal_sync_dir.mkdir(exist_ok=True)
 
-    def make_destination_dir(self, key):
-        destination = pathlib.Path(f'{self.bioportal_sync_dir}/{key}')
-        destination.mkdir(exist_ok=True)
-        return destination
 
-
-    def process_endpoint(self, key, url, now):
-        jsonfile = self.download_json(key, url, now)
+    def process_endpoint(self, endpoint, now):
+        jsonfile = self.download_json(endpoint, now)
         jsonlfile = f'{jsonfile}l'
         self.convert_to_jsonl(jsonfile, jsonlfile, now)
         jsonfile = self.compress_file(jsonfile)
         jsonlfile = self.compress_file(jsonlfile)
-        parquetfile = f'{key}_{now.isoformat()}.parquet'
-        # FIXME: fails because of colons in filename timestamp
-        # self.convert_to_parquet(jsonlfile, parquetfile)
+        parquetfile = endpoint.make_filename(now, "parquet")
+        self.convert_to_parquet(jsonlfile, parquetfile)
 
-    def download_json(self, key, url, now):
-        logging.info('Downloading %s from %s', key, url)
-        r = requests.get(url, headers={'Accept-Encoding': 'gzip'})
-        outpath = f'{key}_{now.isoformat()}.json'
-        with open(outpath, 'wb') as fd:
+        self.move_to_sync_dir(endpoint, now, "json", "json.bz2")
+        self.move_to_sync_dir(endpoint, now, "jsonl", "jsonl.bz2")
+        self.move_to_sync_dir(endpoint, now, "parquet", "parquet")
+
+
+    def move_to_sync_dir(self, endpoint, now, format, extension):
+        destination = endpoint.make_destination_dir(self.bioportal_sync_dir, format)
+        filename = endpoint.make_filename(now, extension)
+        logging.info('Moving %s to %s/', filename, destination)
+        shutil.move(filename, f'{destination}/{filename}')
+
+    def download_json(self, endpoint, now):
+        logging.info('Downloading %s from %s', endpoint.name, endpoint.url)
+        r = requests.get(endpoint.url, headers={'Accept-Encoding': 'gzip'})
+        jsonfile = endpoint.make_filename(now, "json")
+        with open(jsonfile, 'wb') as fd:
             for chunk in r.iter_content(chunk_size=128):
                 fd.write(chunk)
-        return outpath
+        return jsonfile
 
     def compress_file(self, path):
         logging.info('Compressing %s', path)
@@ -99,6 +106,28 @@ class Bioportal():
 
     def convert_to_parquet(self, jsonlfile, outpath):
         logging.info('Converting %s to Parquet...', jsonlfile)
-        # FIXME: fails because of colons in filename timestamps
         table = pyarrow.json.read_json(jsonlfile)
-        pyarrow.parquet.write_table(table, outpath)
+        # Without this `filesystem` nonsense, PyArrow fails if there's colons
+        # in filename timestamps
+        pyarrow.parquet.write_table(table, outpath, filesystem=self.filesystem)
+
+class Endpoint():
+    def __init__(self, name, version, url):
+        self.name = name
+        self.version = version
+        self.url = url
+
+    def make_destination_dir(self, bioportal_sync_dir, format):
+        destination = pathlib.Path(f'{bioportal_sync_dir}/bioportal/{self.name}/{format}_{self.version}')
+        destination.mkdir(exist_ok=True, parents=True)
+        return destination
+
+    def make_filename(self, now, extension):
+        return f'{self.name}_{now.isoformat()}.{extension}'
+
+BIOPORTAL_ENDPOINTS = [
+    Endpoint(
+        'grouped-by-collected-date', 'v1',
+        'https://BioPortal.salud.gov.pr/api/administration/reports/cases/grouped-by-collected-date'
+    )
+]
