@@ -6,11 +6,10 @@
 set -e
 set -o pipefail
 
+HERE="$(dirname $0)"
 downloadedAt="${1:?"No downloadedAt argument given"}"
 file="${2:?"No argument file given"}"
 
 echo 'downloadedAt,collectedDate,reportedDate,ageRange,testType,result,city,createdAt'
-cat "${file}" \
-    | bunzip2 \
-    | jq -r '.[] | [.collectedDate, .reportedDate, .ageRange, .testType, .result, .city, .createdAt] | @csv' \
-    | sed -e "s/^/${downloadedAt},/"
+"${HERE}"/bioportal-to-jsonl.sh "${downloadedAt}" "${file}" \
+    | jq -r '[.downloadedAt, .collectedDate, .reportedDate, .ageRange, .testType, .result, .city, .createdAt] | @csv'
