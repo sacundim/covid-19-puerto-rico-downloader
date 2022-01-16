@@ -4,9 +4,8 @@ import argparse
 import copy
 from datetime import datetime
 import json
-import json_stream
-from json_stream.dump import JSONStreamEncoder
 import logging
+import naya
 from pyarrow import json as arrow_json
 import pyarrow
 import pyarrow.parquet as parquet
@@ -63,11 +62,10 @@ def json2jsonl(inputfile, outputfile, downloadedAt):
     downloadedAt = downloadedAt.isoformat()
     with open(inputfile, 'r') as input:
         with open(outputfile, 'w') as output:
-            data = json_stream.load(input)
-            for record in data.persistent():
-#                copied = copy.copy(record)
-#                copied['downloadedAt'] = downloadedAt
-                output.write(json.dumps(record, default=json_stream.dump.default))
+            for record in naya.stream_array(naya.tokenize(input)):
+                copied = copy.copy(record)
+                copied['downloadedAt'] = downloadedAt
+                output.write(json.dumps(copied))
                 output.write('\n')
 
 def compress_file(file):
