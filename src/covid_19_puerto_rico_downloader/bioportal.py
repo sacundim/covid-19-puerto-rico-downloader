@@ -30,7 +30,7 @@ def bioportal_download():
     """Entry point for Bioportal download code."""
     logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
     args = process_arguments()
-    now = datetime.now(tz=timezone('America/Puerto_Rico'))
+    now = datetime.now()
     logging.info('Now = %s', now.isoformat())
     deaths_download(now, args)
 
